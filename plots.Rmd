@@ -1,0 +1,413 @@
+---
+title: "Plots S1"
+output: html_notebook
+---
+
+```{r # Libraries}
+pacman::p_load(tidyverse, lme4, lmerTest, plotly, patchwork, magick)
+
+# load in functions
+source("./funcs_for_graphs.R")
+```
+
+```{r Import the raw data, message=FALSE}
+dat <- read_csv('../Data/behaviour_for_plots.csv')
+```
+
+```{r Plot the main effect of fNMES}
+fit4 <- readRDS("../Data/models/fit4.rds")
+
+pred_df <- data.frame(dat, response_fitted = fitted(fit4))
+
+## Average modelled values
+fit4_mod <- pred_df %>% 
+  select(participant, emotion, nmes, response_fitted) %>%  
+  group_by(participant, emotion, nmes) %>% 
+  summarise(N_trials = n(),
+            N_hap_resp = sum(response_fitted),
+            Percent_hap_resp = (N_hap_resp / N_trials) * 100 ) 
+
+## Average raw values
+fit4_raw <- dat %>%
+  select(participant, emotion, nmes, response_n) %>%  
+  group_by(participant, emotion, nmes) %>% 
+  summarise(N_trials = n(),
+            N_hap_resp = sum(response_n),
+            Percent_hap_resp = (N_hap_resp / N_trials) * 100 ) 
+
+## Bind the raw and modelled dfs
+new_data <- bind_rows(
+  fit4_raw %>% mutate(type = "Raw Data"),
+  fit4_mod %>% mutate(type = "Modelled Data") ) %>% 
+  group_by(emotion, nmes, type) %>%
+  reframe(se = sd(Percent_hap_resp, na.rm = TRUE) / sqrt(N_trials),
+            N_trials = sum(N_trials),
+            Percent_hap_resp = mean(Percent_hap_resp))
+
+new_data2 <- bind_rows(
+  fit4_raw %>% mutate(type = "Raw Data"),
+  fit4_mod %>% mutate(type = "Modelled Data") ) 
+```
+
+```{r}
+new_data <- new_data %>%
+  mutate(emotion = recode(emotion,
+    `-3` = 1,
+    `-2` = 2,
+    `-1` = 3,
+     `1` = 4,
+     `2` = 5,
+     `3` = 6
+  ))
+
+new_data2 <- new_data2 %>%
+  mutate(emotion = recode(emotion,
+    `-3` = 1,
+    `-2` = 2,
+    `-1` = 3,
+     `1` = 4,
+     `2` = 5,
+     `3` = 6
+  ))
+
+plot_fit4_model_only <- 
+  filter(new_data, type == 'Modelled Data') %>% 
+  mutate(nmes = factor(nmes, levels = c('on', 'off'))) %>% 
+  ggplot(aes(x = emotion, y = Percent_hap_resp, color = nmes, linetype = nmes)) +
+  geom_line(alpha = .4, position = position_dodge(0.1)) +
+  geom_jitter(data = new_data2, aes(x = emotion, y = Percent_hap_resp, color = nmes), 
+              alpha =.1, width = .3) +
+  geom_errorbar(aes(x = emotion, 
+                    ymin = Percent_hap_resp - se, 
+                    ymax = Percent_hap_resp + se),
+                width = 0.5, 
+                position = position_dodge(0.3)) +
+  stat_summary(fun = mean, geom = "point", shape = 21, size = 2, fill = "black", 
+               position = position_dodge(0.3))+
+  scale_y_continuous(name = "Percentage of choice happy", 
+                     limits = c(-10, 110), breaks = seq(0, 100, 25)) +
+  scale_color_manual(values = c("#D55E00", "#0072B2"), name = "fNMES",
+                     labels = c('on', 'off'),
+                     guide = guide_legend(override.aes = list(alpha = 1))) +
+  scale_x_continuous(name = "Percentage emotion in Stimulus (sad to happy)",
+                     breaks = c(1, 2, 3, 4, 5, 6),
+                     labels = c("30% sad", "20%", "10%", 
+                                "10%", "20%", "30% happy"),
+                     sec.axis = sec_axis(~ .,
+                                         name = "Ambiguity",
+                                         breaks = c(1, 2, 3, 4, 5, 6),
+                                         labels = c("0", ".5", "1", "1", ".5", "0"))) +
+  scale_linetype(name = "fNMES", labels = c('on', 'off')) +
+  theme_bw() +
+  theme(text = element_text(size = 16),
+        axis.title = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        legend.position = c(.9, .2),
+        legend.background = element_blank())
+
+plot_fit4_model_only
+```
+
+```{r Add PSE values}
+# Define PSE values
+
+# These values are the original using -3 to 3
+pse_values <- data.frame(nmes = c("off", "on"), PSE = c(-0.53, -0.63))
+
+# HOWEVER, we will use these values, because ggplot doesn't let us use scale_x_discrete with a secondary axis, we have had to convert everything to 1-5 to remove a 0 on the scale_x_continuous
+pse_values <- data.frame(nmes = c("off", "on"), PSE = c(3.12, 3.03))
+
+plot_fit4_model_only_pse <- plot_fit4_model_only +
+  # Add vertical segment lines
+  geom_segment(data = pse_values, aes(x = PSE, xend = PSE, y = -Inf, yend = 50), 
+               linetype = "dashed", color = "black", alpha = .2) +
+  annotate("text", x = 3.5, y = 0, label = "off = -.53", 
+           color = "#0072B2", size = 4.5, angle = 0) +
+  annotate("text", x = 2.6, y = 0, label = "on = -.62", 
+           color = "#D55E00", size = 4.5, angle = 0) +
+  # Add horizontal segment lines
+  geom_segment(data = pse_values, aes(x = -Inf, xend = PSE, y = 50, yend = 50),
+               linetype = "dashed", color = "black", alpha = .2)
+
+plot_fit4_model_only_pse
+```
+
+```{r Plot difference scores}
+dat_averaged <- pred_df %>% 
+  group_by(participant, nmes, emotion) %>% 
+  summarise(mean_response_n = mean(response_fitted) * 100) %>%
+  mutate(emotion = recode(emotion,
+                          `-3` = 1,
+                          `-2` = 2,
+                          `-1` = 3,
+                          `1` = 4,
+                          `2` = 5,
+                          `3` = 6
+  ))
+
+# Filter data and compute difference scores
+diff_scores <- dat_averaged %>%
+  filter(nmes %in% c("on", "off")) %>%
+  group_by(participant, emotion) %>%
+  summarize(difference = mean_response_n[nmes == "on"] - mean_response_n[nmes == "off"]) %>%
+  group_by(emotion)
+
+plot_diff_mod <- diff_scores %>% 
+  group_by(emotion) %>% 
+  summarise(se = sd(difference) / sqrt(n()),
+            difference = mean(difference)) %>%
+  ggplot(aes(x = emotion, y = difference)) +
+  geom_jitter(data = diff_scores, aes(x = emotion, y = difference), 
+              color = 'grey', 
+              alpha = .2,
+              width = .3) +
+  geom_errorbar(aes(ymin = difference - se, ymax = difference + se), width = .2) +
+  geom_point() +
+  ylab("Difference in Percentage choice Happy") +
+  theme_bw() +
+  theme(text = element_text(size = 16),
+        axis.title = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank()) +
+  geom_hline(yintercept = 0, size = 1, linetype = "dashed", color = "black") + # add this line
+  scale_x_discrete(name = "Percentage emotion in Stimulus (sad to happy)",
+                   limits = c(1, 2, 3, 4, 5, 6),
+                   labels = c("30% sad", "20", "10", "10", "20", "30% happy")) +
+  theme(text = element_text(size = 16),
+        axis.title = element_text(size = 16),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank())
+
+plot_diff_mod
+```
+
+```{r Merge the plots}
+p1 <- plot_fit4_model_only_pse + labs(title = "A")
+p2 <- plot_diff_mod + labs(title = "B")
+
+# Arrange the plots vertically with labels
+combined_plot <- p1 + p2 +
+  plot_layout(nrow = 1, ncol = 2,
+              widths = c(10, 8),
+              heights = c(5))
+
+combined_plot
+
+# Save the plot as a svg file
+ggsave("../figures/combined_plots_of_model.svg", combined_plot, 
+       width = 14, height = 7, dpi = 300)
+```
+
+```{r Plot ERP traces}
+p1 <- read_csv('../Data/amp_P1.csv') %>% transform_data(.)
+
+plot_p100_epoch <-
+  p1 %>%
+  group_by(participant, time) %>% 
+  mutate(pure_nmes = mean(amp[emo == '999'])) %>% 
+  mutate(amp = ifelse(nmes == 'on', amp - pure_nmes, amp)) %>% 
+  filter(emo != '999') %>% 
+  group_by(nmes, time) %>%
+  summarise(se = sd(amp) / sqrt(n()),
+            amp = mean(amp)) %>%
+  ggplot(aes(x = time, y = amp, color = nmes)) +
+  geom_line(size = 1) +
+  geom_ribbon(aes(ymin = amp - se, ymax = amp + se, fill = nmes), color = "NA", alpha = 0.4) +
+  labs(title = "Electrodes O1/O2", x = "Time (ms)", y = "P1 Amplitudes (μV)") +
+  scale_y_continuous(breaks = seq(-4, max(p1$amp), by = 2)) +
+  scale_color_manual('fNMES', values = c("#0072B2", "#D55E00")) +
+  scale_fill_manual('fNMES', values = c("#0072B2", "#D55E00")) +
+  theme_bw() +
+  theme(text = element_text(size = 20),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 20),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(), 
+        legend.position = c(.99, .01),  # Move the legend to bottom right
+        legend.justification = c(1, 0),
+        legend.background = element_blank()) +
+  annotate("rect", xmin = 80, xmax = 140, 
+           ymin = -Inf, ymax = Inf, fill = "gray", alpha = 0.2) +
+  coord_cartesian(xlim = c(-50, 250))  
+
+
+n170 <- bind_rows(
+  read_csv('../Data/amp_N170L.csv') %>% transform_data() %>% mutate(hemisphere = 'Left'),
+  read_csv('../Data/amp_N170R.csv') %>% transform_data() %>% mutate(hemisphere = 'Right') )
+
+rm(n170L, n170R)
+
+# Preprocess hemisphere variable
+n170$hemisphere <- ifelse(n170$hemisphere == "Left", "Left hemisphere (PO7/P7)", 
+                          "Right hemisphere (PO8/P8)")
+
+plot_n170_epoch <-
+  n170 %>%
+  group_by(participant, time) %>% 
+  mutate(pure_nmes = mean(amp[emo == '999'])) %>% 
+  mutate(amp = ifelse(nmes == 'on', amp - pure_nmes, amp)) %>% 
+  filter(emo != '999') %>% 
+  group_by(nmes, time) %>%
+  summarise(se = sd(amp) / sqrt(n()),
+            amp = mean(amp)) %>%
+  ggplot(aes(x = time, y = amp, color = nmes)) +
+  geom_line(size = 1, alpha = .8) +
+  geom_ribbon(aes(ymin = amp - se, ymax = amp + se, fill = nmes), color = "NA", alpha = 0.4) +
+  labs(title = "Electrodes P7, TP7, P8, TP8", x = "Time (ms)", y = "N170 Amplitudes (μV)") +
+  scale_y_continuous(breaks = seq(-4, max(n170$amp), by = 2)) +
+  scale_color_manual('fNMES', values = c("#0072B2", "#D55E00")) +
+  scale_fill_manual('fNMES', values = c("#0072B2", "#D55E00")) +
+  theme_bw() +
+  theme(text = element_text(size = 18),
+        axis.title = element_text(size = 18),
+        axis.text = element_text(size = 18),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(), 
+        legend.position = c(.99, .01),  # Move the legend to bottom right
+        legend.justification = c(1, 0),
+        legend.background = element_blank()) +
+  annotate("rect", xmin = 130, xmax = 190, 
+           ymin = -Inf, ymax = Inf, fill = "gray", alpha = 0.2) +
+  coord_cartesian(xlim = c(-50, 250))
+
+lpp = read_csv('../Data/amp_LPP.csv') %>% transform_data(.)
+
+lpp <-
+  mutate(lpp, emotion = ifelse(emotion == "-1", "10% Sad", 
+                               ifelse(emotion == "-2", "20% Sad", 
+                                      ifelse(emotion == "-3", "30% Sad", 
+                                             ifelse(emotion == "1", "10% Happy", 
+                                                    ifelse(emotion == "2", "20% Happy", 
+                                                           ifelse(emotion == "3", "30% Happy", emotion)))))))
+
+plot_lpp_epoch <- lpp %>%
+  group_by(participant, time) %>% 
+  mutate(pure_nmes = mean(amp[emo == '999'])) %>% 
+  mutate(amp = ifelse(nmes == 'on', amp - pure_nmes, amp)) %>% 
+  filter(emo != '999') %>% 
+  group_by(nmes, time) %>%
+  summarise(se = sd(amp) / sqrt(n()),
+            amp = mean(amp)) %>%
+  ggplot(aes(x = time, y = amp, color = nmes)) +
+  geom_line(size = 1, alpha = .8) +
+  geom_ribbon(aes(ymin = amp - se, ymax = amp + se, fill = nmes), color = "NA", alpha = 0.4) +
+  labs(title = "Electrodes CPz, Pz, and POz", x = "Time (ms)", y = "LPP Amplitudes (μV)") +
+  scale_y_continuous(breaks = seq(-6, max(lpp$amp), by = 2)) +
+  scale_color_manual('fNMES', values = c("#0072B2", "#D55E00")) +
+  scale_fill_manual('fNMES', values = c("#0072B2", "#D55E00")) +
+  theme_bw() +
+  theme(text = element_text(size = 18),
+        axis.title = element_text(size = 18),
+        axis.text = element_text(size = 18),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(),
+        panel.border = element_blank(), 
+        legend.position = c(.99, .01),  # Move the legend to bottom right
+        legend.justification = c(1, 0),
+        legend.background = element_blank()) +
+  annotate("rect", xmin = 450, xmax = 650, ymin = -Inf, ymax = Inf, 
+           fill = "gray", alpha = 0.2) +
+  coord_cartesian(xlim = c(0, 800))
+
+plot_lpp_epoch
+```
+
+```{r Bar plot for LPP}
+dat3 <- read_csv('../data/df_eeg.csv')
+
+dat3$emo <- factor(dat3$emo, levels = c('none', 'sad', 'happy'))
+
+barplot_LPP <- dat3 %>%
+  filter(quality_LPP == 0) %>% 
+  group_by(participant) %>% 
+  mutate(pure_nmes = mean(LPP[emo == 'none'])) %>% 
+  mutate(LPP = ifelse(nmes == 'on', LPP - pure_nmes, LPP)) %>% 
+  mutate(emotion = as.factor(emotion)) %>% 
+  filter(emotion != '999') %>% 
+  group_by(emotion, emo) %>%
+  summarise(mean_LPP = mean(LPP), se = sd(LPP) / sqrt(n())) %>% 
+  ggplot(aes(x = emotion, y = mean_LPP, fill = emo)) +
+  geom_bar(stat = "identity", position = "dodge",  color = "black") +
+  geom_errorbar(aes(ymin = mean_LPP - se, ymax = mean_LPP + se), 
+                width = .2, position = position_dodge(.9)) +
+  scale_fill_manual('', values = c("#A94040", "#2E9EBB")) +
+  labs(x = "fNMES", y = "LPP Amplitudes (μV)") +
+  scale_x_discrete(name = "Percentage emotion in stimulus (sad to happy)",
+                   labels = c("30% sad", "20", "10", "10", "20", "30% happy")) +
+  theme_bw() +
+  theme(text = element_text(size = 14),
+        axis.title = element_text(size = 14),
+        axis.text = element_text(size = 14),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        legend.position = 'bottom') +
+  
+  geom_segment(aes(x = "-3", xend = "-1", 
+                   y = 3.5, yend = 3.5), color = "black") +
+  annotate("text", x = 2, y = 3.6, label = "*", size = 10, color = "black") +
+  
+  geom_segment(aes(x = "3", xend = "-1", 
+                   y = 3.6, yend = 3.6), color = "black") +
+  annotate("text", x = 4.5, y = 3.7, label = "*", size = 10, color = "black")
+
+barplot_LPP
+```
+
+```{r}
+# Save the plot as a svg file
+ggsave("../figures/plot_p100_epoch.svg", plot_p100_epoch, 
+       width = 8, height = 6, dpi = 300)
+
+ggsave("../figures/plot_n170_epoch.svg", plot_n170_epoch, 
+       width = 8, height = 6, dpi = 300)
+
+ggsave("../figures/plot_lpp_epoch.svg", plot_lpp_epoch, 
+       width = 8, height = 6, dpi = 300)
+
+ggsave("../figures/barplot_LPP.svg", barplot_LPP, 
+       width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+library(imager)
+topos <- image_read("../figures/topos.png")
+
+topos <- ggplot() + 
+  annotation_custom(grid::rasterGrob(topos,
+                                                                    width=ggplot2::unit(1,"npc"),
+                                                                         height=ggplot2::unit(1,"npc")), -Inf, Inf, -Inf, Inf) + 
+  theme_bw() +
+  theme(text = element_text(size = 20),
+        axis.title = element_text(size = 20),
+        axis.text = element_text(size = 20),
+        panel.grid.major = element_blank(),
+        panel.grid.minor = element_blank(), 
+        panel.border = element_blank(), 
+        legend.position = 'bottom')
+```
+
+```{r}
+library(patchwork)
+# Add labels 'a' and 'b' to your plots
+p1 <- plot_p100_epoch + labs(title = "A")
+p2 <- plot_n170_epoch + labs(title = "B")
+p3 <- plot_lpp_epoch + labs(title = "C")
+p4 <- topos + labs(title = "D")
+p5 <- barplot_LPP + labs(title = "E")
+
+# Arrange the plots vertically with labels
+combined_plot <- p1 + p2 + p3 + p4 + p5 + plot_spacer() +
+  plot_layout(nrow = 2, ncol = 3, 
+              widths = c(8, 8, 8),
+              heights = unit(c(8, 8, 8), c('cm', 'null')))
+
+# Print the combined plot
+print(combined_plot)
+
+ggsave("../figures/combined_plot_erp_epochs.svg", 
+       combined_plot, width = 14, height = 10, dpi = 300)
+```
